@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIKC — Gerador de Contratos</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root{
+    --preto:#111111; --amarelo:#FFD400; --cinza:#f4f4f4;
+    --borda:#dddddd; --texto:#1d1d1f;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:Arial, Helvetica, sans-serif; background:var(--cinza); color:var(--texto);}
+  header{background:var(--preto); color:#fff; padding:14px 24px; display:flex; align-items:center; gap:12px;}
+  header .marca{background:var(--amarelo); color:var(--preto); font-weight:bold; padding:2px 8px; border-radius:4px;}
+  header h1{font-size:17px; font-weight:600;}
+  header .cliente{margin-left:auto; font-size:13px; opacity:.85;}
+  main{display:grid; grid-template-columns:380px 1fr; gap:20px; padding:20px; max-width:1500px; margin:0 auto;}
+  @media (max-width:900px){ main{grid-template-columns:1fr;} }
+  .painel{background:#fff; border:1px solid var(--borda); border-radius:10px; padding:18px;}
+  .painel h2{font-size:14px; text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px;}
+  textarea{width:100%; min-height:90px; padding:10px; border:1px solid var(--borda); border-radius:6px; font-size:13px; resize:vertical;}
+  .dica{font-size:12px; color:#777; margin-top:6px; line-height:1.4;}
+  button{cursor:pointer; border:none; border-radius:6px; padding:10px 14px; font-size:14px; font-weight:600;}
+  .btn-principal{background:var(--amarelo); color:var(--preto); width:100%; margin-top:10px;}
+  .btn-principal:hover{filter:brightness(.95);}
+  .btn-sec{background:var(--preto); color:#fff; width:100%; margin-top:8px;}
+  .btn-sec:hover{opacity:.88;}
+  .campo{margin-top:12px;}
+  .campo label{display:block; font-size:12px; font-weight:bold; margin-bottom:4px; text-transform:uppercase;}
+  .campo input{width:100%; padding:9px 10px; border:1px solid var(--borda); border-radius:6px; font-size:14px;}
+  .preview{display:flex; justify-content:center; align-items:flex-start;}
+  canvas{max-width:100%; height:auto; border:1px solid var(--borda); border-radius:6px; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,.08);}
+  .edit-box{background:#fff8d6; border:1px dashed #c9a800; border-radius:8px; padding:12px; margin-top:14px; font-size:13px;}
+  .edit-box select,.edit-box input[type=range]{width:100%; margin-top:6px;}
+  .erro{background:#ffe5e5; border:1px solid #e08; border-radius:8px; padding:14px; margin:20px; font-size:14px;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<header>
+  <span class="marca">FIKC</span>
+  <h1>Gerador de Contratos</h1>
+  <span class="cliente" id="nomeCliente"></span>
+</header>
+
+<div id="erro" class="erro hidden"></div>
+
+<main id="app" class="hidden">
+  <section class="painel">
+    <h2>1 · Cole os dados do FIKC App</h2>
+    <textarea id="entrada" placeholder="Nome do Paciente | CPF | Endereço"></textarea>
+    <p class="dica">Formato: <b>Nome | CPF | Endereço</b> — separados por barra vertical ( | ).</p>
+    <button class="btn-principal" id="btnProcessar">Processar</button>
+
+    <h2 style="margin-top:22px;">2 · Revise os campos</h2>
+    <div id="campos"></div>
+
+    <h2 style="margin-top:22px;">3 · Baixe o contrato</h2>
+    <button class="btn-sec" id="btnPdf">Baixar PDF</button>
+    <button class="btn-sec" id="btnPng">Baixar PNG</button>
+
+    <div id="editBox" class="edit-box hidden">
+      <b>Modo configurador</b><br>
+      Selecione o campo e clique no canvas para reposicionar.
+      <select id="editCampo"></select>
+      <label style="display:block;margin-top:8px;">Tamanho da fonte: <span id="editSizeVal"></span>px</label>
+      <input type="range" id="editSize" min="14" max="48" step="1">
+      <button class="btn-sec" id="btnConfig" style="margin-top:10px;">Baixar config.js atualizado</button>
+    </div>
+  </section>
+
+  <section class="painel preview">
+    <canvas id="canvas"></canvas>
+  </section>
+</main>
+
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const cliente = params.get("cliente");
+  const editMode = params.get("edit") === "true";
+  const erroEl = document.getElementById("erro");
+
+  function mostrarErro(msg){ erroEl.textContent = msg; erroEl.classList.remove("hidden"); }
+
+  if(!cliente){
+    mostrarErro('Cliente não informado. Use a URL com ?cliente=NOME (ex.: ?cliente=cicala).');
+    return;
+  }
+
+  // Carrega config.js do cliente dinamicamente
+  const script = document.createElement("script");
+  script.src = "clientes/" + encodeURIComponent(cliente) + "/config.js";
+  script.onload = iniciar;
+  script.onerror = () => mostrarErro('Configuração do cliente "' + cliente + '" não encontrada em clientes/' + cliente + '/config.js');
+  document.head.appendChild(script);
+
+  let cfg, img, canvas, ctx;
+  const valores = {};
+
+  function iniciar(){
+    cfg = window.CLIENTE_CONFIG;
+    document.getElementById("nomeCliente").textContent = cfg.nome + (editMode ? " · MODO EDIÇÃO" : "");
+    document.getElementById("app").classList.remove("hidden");
+
+    canvas = document.getElementById("canvas");
+    ctx = canvas.getContext("2d");
+
+    img = new Image();
+    img.onload = function(){
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      desenhar();
+    };
+    img.src = "clientes/" + cliente + "/" + cfg.template;
+
+    // Formulário de revisão
+    const wrap = document.getElementById("campos");
+    cfg.campos.forEach(c => {
+      valores[c.id] = "";
+      const div = document.createElement("div");
+      div.className = "campo";
+      div.innerHTML = '<label>' + c.label + '</label><input type="text" id="in_' + c.id + '">';
+      wrap.appendChild(div);
+      div.querySelector("input").addEventListener("input", e => {
+        valores[c.id] = e.target.value;
+        desenhar();
+      });
+    });
+
+    document.getElementById("btnProcessar").addEventListener("click", processar);
+    document.getElementById("btnPng").addEventListener("click", baixarPng);
+    document.getElementById("btnPdf").addEventListener("click", baixarPdf);
+
+    if(editMode) iniciarEdicao();
+  }
+
+  function processar(){
+    const bruto = document.getElementById("entrada").value.trim();
+    if(!bruto) return;
+    const partes = bruto.split(cfg.separador || "|").map(s => s.trim());
+    cfg.campos.forEach((c, i) => {
+      const v = partes[i] || "";
+      valores[c.id] = v;
+      document.getElementById("in_" + c.id).value = v;
+    });
+    desenhar();
+  }
+
+  function desenhar(){
+    if(!img || !img.complete) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    ctx.fillStyle = cfg.cor || "#000";
+    ctx.textBaseline = "alphabetic";
+    cfg.campos.forEach(c => {
+      const texto = valores[c.id];
+      if(!texto) return;
+      // Reduz a fonte até caber no maxWidth
+      let size = c.size;
+      do {
+        ctx.font = size + "px " + (cfg.fontePadrao || "Arial");
+        if(ctx.measureText(texto).width <= c.maxWidth || size <= 12) break;
+        size--;
+      } while(true);
+      ctx.fillText(texto, c.x, c.y);
+      if(editMode && c.id === campoSelecionado()){
+        ctx.strokeStyle = "#c9a800";
+        ctx.strokeRect(c.x - 4, c.y - size - 4, c.maxWidth + 8, size + 12);
+      }
+    });
+  }
+
+  function nomeArquivo(ext){
+    const p = (valores[cfg.campos[0].id] || "contrato").replace(/[^\p{L}\p{N} _-]/gu, "").trim().replace(/\s+/g, "_");
+    return "Contrato_" + p + "." + ext;
+  }
+
+  function baixarPng(){
+    const a = document.createElement("a");
+    a.download = nomeArquivo("png");
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  }
+
+  function baixarPdf(){
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+    pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, 210, 297);
+    pdf.save(nomeArquivo("pdf"));
+  }
+
+  // ----- Modo configurador (?edit=true) -----
+  function campoSelecionado(){
+    const sel = document.getElementById("editCampo");
+    return sel ? sel.value : null;
+  }
+
+  function iniciarEdicao(){
+    const box = document.getElementById("editBox");
+    box.classList.remove("hidden");
+    const sel = document.getElementById("editCampo");
+    cfg.campos.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.id; o.textContent = c.label;
+      sel.appendChild(o);
+    });
+    const range = document.getElementById("editSize");
+    const sizeVal = document.getElementById("editSizeVal");
+    function syncRange(){
+      const c = cfg.campos.find(x => x.id === sel.value);
+      range.value = c.size; sizeVal.textContent = c.size;
+    }
+    sel.addEventListener("change", () => { syncRange(); desenhar(); });
+    range.addEventListener("input", () => {
+      const c = cfg.campos.find(x => x.id === sel.value);
+      c.size = parseInt(range.value, 10);
+      sizeVal.textContent = c.size;
+      desenhar();
+    });
+    syncRange();
+
+    canvas.addEventListener("click", e => {
+      const r = canvas.getBoundingClientRect();
+      const x = Math.round((e.clientX - r.left) * (canvas.width / r.width));
+      const y = Math.round((e.clientY - r.top) * (canvas.height / r.height));
+      const c = cfg.campos.find(k => k.id === sel.value);
+      c.x = x; c.y = y;
+      desenhar();
+    });
+
+    document.getElementById("btnConfig").addEventListener("click", () => {
+      const linhas = cfg.campos.map(c =>
+        '    { id: "' + c.id + '", label: "' + c.label + '", x: ' + c.x + ', y: ' + c.y + ', size: ' + c.size + ', maxWidth: ' + c.maxWidth + ' }'
+      ).join(",\n");
+      const out =
+'// Config — ' + cfg.nome + '\n' +
+'window.CLIENTE_CONFIG = {\n' +
+'  nome: "' + cfg.nome + '",\n' +
+'  template: "' + cfg.template + '",\n' +
+'  separador: "' + (cfg.separador || "|") + '",\n' +
+'  fontePadrao: "' + (cfg.fontePadrao || "Arial, sans-serif") + '",\n' +
+'  cor: "' + (cfg.cor || "#1d1d1f") + '",\n' +
+'  campos: [\n' + linhas + '\n  ]\n};\n';
+      const a = document.createElement("a");
+      a.download = "config.js";
+      a.href = URL.createObjectURL(new Blob([out], { type: "text/javascript" }));
+      a.click();
+    });
+  }
+})();
+</script>
+</body>
+</html>
